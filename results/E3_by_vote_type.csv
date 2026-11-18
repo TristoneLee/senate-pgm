@@ -1,0 +1,7 @@
+model,subset,n_rollcalls,acc
+M1,party-line roll calls,112,0.9651759530791789
+M1,cross-cutting roll calls,20,0.8379084967320262
+M2,party-line roll calls,112,0.966642228739003
+M2,cross-cutting roll calls,20,0.8339869281045752
+M3 (MF),party-line roll calls,112,0.9685972629521017
+M3 (MF),cross-cutting roll calls,20,0.8326797385620915

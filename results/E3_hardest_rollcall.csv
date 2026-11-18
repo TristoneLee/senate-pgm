@@ -1,0 +1,11 @@
+,0
+date,2024-11-20
+question,On the Motion to Discharge
+description,"A joint resolution providing for congressional disapproval of the proposed license amendment for the export of certain defense articles, defense services, and technical data to Israel."
+yea,17
+nay,79
+M1_accuracy,0.683
+assigned_class,Z=5 (posterior 1.00)
+mean_pred_yea,"{'D': 0.16, 'R': 0.31, 'I': 0.21}"
+yea_by_party,"{'D': '15/46', 'R': '0/47', 'I': '2/3'}"
+mispredicted,"Cruz (R-TX), Durbin (D-IL), Daines (R-MT), Hirono (D-HI), Heinrich (D-NM), Hawley (R-MO), Johnson (R-WI), King (I-ME), Kaine (D-VA), Kennedy (R-LA), Luján (D-NM), Lummis (R-WY), Lee (R-UT), Markey (D-MA), Murphy (D-CT)"

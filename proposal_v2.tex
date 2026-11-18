@@ -1,0 +1,104 @@
+\documentclass[10pt,twocolumn]{article}
+\usepackage[letterpaper,margin=0.65in,columnsep=0.3in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{times}
+\usepackage{xcolor}
+\usepackage[compact]{titlesec}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+\definecolor{accent}{RGB}{30,80,140}
+\titleformat{\section}{\normalsize\bfseries\color{accent}}{\thesection}{0.6em}{}
+\titlespacing*{\section}{0pt}{8pt}{3pt}
+\setlist{nosep,leftmargin=1em,itemsep=1.5pt}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{4pt}
+\setlength{\abovedisplayskip}{3pt}
+\setlength{\belowdisplayskip}{3pt}
+\pagestyle{empty}
+
+\begin{document}
+
+\twocolumn[{%
+\begin{center}
+{\Large\bfseries Probabilistic Graphical Models of\\[1pt] U.S. Senate Roll-Call Voting}\\[6pt]
+{\small CSE 150A/250A Project Proposal \quad$\cdot$\quad \textbf{Group:} \textit{[Group Name]}}\\[1pt]
+{\small \textit{[Name 1 (PID)], [Name 2 (PID)], [Name 3 (PID)], [Name 4 (PID)], [Name 5 (PID)]}}
+\end{center}
+\vspace{6pt}
+}]
+
+\section{Problem Description}
+Senators do not vote independently: party discipline, ideological blocs and cross-party alliances
+create strong dependencies among votes, and some votes are missing. We ask three questions:
+\begin{itemize}
+\item \textbf{Q1:} given the observed votes of some senators on a roll call, what is
+$P(X_i{=}\text{Yea}\mid\mathbf{x}_O)$ for each remaining senator?
+\item \textbf{Q2:} which dependency structure (latent classes, a tree, or a loopy graph) best explains the data?
+\item \textbf{Q3:} do the learned dependencies carry over from one Congress to the next?
+\end{itemize}
+Answering them requires explicit independence assumptions, learning with and without missing data
+(MLE vs.\ EM), and exact vs.\ approximate inference. Our aim is to understand what each model captures
+or misses, not to maximize accuracy.
+
+\section{Dataset Source}
+\textbf{Voteview} roll-call data for the 117th (2021--22) and 118th (2023--24) Senates
+(Lewis et al., \url{https://voteview.com/data}): individual votes, member party/state, and roll-call metadata.
+\begin{itemize}
+\item \textbf{Variables:} senator $X_i\in\{-1,+1\}$ (Nay/Yea), $N\approx100$; each roll call is one sample:
+949 (117th) and 691 (118th) roll calls; 91 senators served in both.
+\item \textbf{Preprocessing:} cast codes 1--3$\to$Yea, 4--6$\to$Nay, 7--9$\to$missing (4--5\%, assumed
+missing at random); drop near-unanimous votes ($\approx$4\% of roll calls); drop senators present for
+under half of a Congress; chronological 80/20 split
+within each Congress. Party and state are used only to interpret results.
+\item \textbf{Limitations:} few samples relative to $O(N^2)$ pairwise parameters; strategic absences
+make missingness not truly random; membership changes between Congresses.
+\end{itemize}
+
+\section{Methodology}
+We compare three models of increasing expressiveness.
+
+\textbf{M1: Latent-class Naive Bayes.} Each roll call has a hidden coalition type $Z\in\{1,\dots,K\}$
+(e.g.\ Democratic-backed, Republican-backed, bipartisan), and votes are independent given $Z$:
+\[
+P(z,\mathbf{x})=\pi_z\textstyle\prod_i P(x_i\mid z).
+\]
+Parameters $\pi_k$ and $\theta_{ik}=P(X_i{=}{+}1\mid Z{=}k)$ are learned by \textbf{EM}. The E-step
+computes responsibilities $\gamma_{mk}=P(Z^{(m)}{=}k\mid\mathbf{x}_O^{(m)})$ from observed votes only, so
+missing data is handled directly. The M-step sets $\pi_k$ to the average $\gamma_{mk}$ and $\theta_{ik}$ to the
+$\gamma$-weighted Yea rate. We use several random restarts and choose $K\in\{2,\dots,6\}$ by held-out
+log-likelihood. Exact inference costs $O(KN)$.
+
+\textbf{M2: Chow-Liu tree BN.} A maximum-weight spanning tree on empirical pairwise mutual information
+$I(X_i;X_j)$, rooted into a DAG; this is the maximum-likelihood tree. CPTs are fit by \textbf{MLE} on
+complete data and by \textbf{EM} with missing votes. Exact marginals come from sum-product belief
+propagation in $O(N)$.
+
+\textbf{M3: Sparse Ising model.} Trees cannot represent loops of allied senators, so we fit
+\[
+P(\mathbf{x})\propto\exp\Big(\textstyle\sum_i\theta_i x_i+\sum_{i<j}W_{ij}x_ix_j\Big),
+\]
+where $W_{ij}>0$ ($<0$) means senators $i$ and $j$ tend to agree (disagree). The partition function sums
+over $2^N$ vote patterns, so we learn $(\theta,W)$ by $\ell_1$-regularized \textbf{pseudo-likelihood}, which
+reduces to one convex logistic regression per senator; $\lambda$ is chosen on held-out data. Inference
+uses \textbf{Gibbs sampling} and naive \textbf{mean-field}, both checked against \textbf{exact
+enumeration} on a 16-senator model.
+
+\section{Experiments}
+\begin{itemize}
+\item \textbf{E1, exact vs.\ approximate:} on the 16-senator model, scale couplings by
+$\beta\in[0.1,2]$; report $\ell_1$ and KL error of Gibbs and mean-field marginals vs.\ runtime.
+\item \textbf{E2, missing data:} mask 10/30/50\% of training votes; compare complete-case MLE and EM
+(M1, M2) by held-out log-likelihood and imputation accuracy.
+\item \textbf{E3, model comparison:} reveal a random 20\% of votes on test roll calls and predict the
+rest; report accuracy and per-vote NLL against a per-senator baseline, and interpret learned classes,
+tree edges and couplings using party and state.
+\item \textbf{E4, cross-Congress transfer:} train on the 117th Senate and test on the 118th, restricted to
+senators who served in both. We compare against training on the 118th itself, and test which parameters
+transfer: for M1, refit only the coalition mix $\pi$ while keeping $\theta$; for M1 and M2, use 117th CPTs
+as Beta priors (pseudo-counts) and measure how many 118th roll calls are needed to match in-Congress
+performance.
+\end{itemize}
+\textbf{Stretch goal:} stochastic EM for M3 (Gibbs imputation of missing votes alternating with
+pseudo-likelihood refitting), added to E2.
+
+\end{document}

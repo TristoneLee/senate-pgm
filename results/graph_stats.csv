@@ -1,0 +1,7 @@
+statistic,value
+tree root,Barrasso (R-WY)
+tree max-degree senators,"Barrasso (R-WY), Warnock (D-GA), Duckworth (D-IL)"
+tree cross-party edges,6/99
+Ising edges,1052
+Ising negative edges,284
+Ising cross-party edge fraction,0.26

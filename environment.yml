@@ -1,0 +1,13 @@
+name: cse250
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy
+  - scipy
+  - pandas
+  - matplotlib
+  - jupyter
+  - nbconvert
+  - ipykernel
+  - tectonic   # LaTeX compiler for the report (optional)
