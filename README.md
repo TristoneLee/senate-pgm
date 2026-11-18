@@ -20,7 +20,7 @@ data/raw/            Voteview CSVs for the 117th and 118th Senates
 figures/             figures used in the report (PDF)
 results/             every result table (CSV)
 report/report.tex    final report (report.pdf is the compiled version)
-proposal_v2.tex      project proposal
+proposal/            project proposal (proposal_v2.tex)
 environment.yml      conda environment
 ```
 
