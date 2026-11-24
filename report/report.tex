@@ -1,3 +1,9 @@
+
+
+
+
+
+
 \documentclass[10pt]{article}
 \usepackage[letterpaper,textwidth=5.5in,textheight=9in,centering]{geometry}
 \usepackage{iftex}
@@ -16,8 +22,13 @@
 \usepackage{amsmath,amssymb}
 \usepackage{graphicx}
 \usepackage{booktabs}
+\usepackage{placeins}
+
+\usepackage{float}
+
 \usepackage{tabularx}
 \usepackage{enumitem}
+\usepackage{needspace}
 \usepackage[font=small,labelfont=bf]{caption}
 \usepackage{xcolor}
 \usepackage[hidelinks]{hyperref}
@@ -25,12 +36,19 @@
 \setlist{nosep,leftmargin=1.3em}
 \setlength{\parindent}{0pt}
 \setlength{\parskip}{5pt}
+
+\widowpenalty=10000
+\clubpenalty=10000
+
 \newcommand{\todo}[1]{\textcolor{red}{[#1]}}
 
 \title{\vspace{-0.6in}\rule{\linewidth}{3pt}\\[6pt]
 \textbf{Probabilistic Graphical Models of U.S.\ Senate Roll-Call Voting}\\[2pt]\rule{\linewidth}{1pt}}
 \author{\textbf{Conditionally Independent Caucus}\\
-\todo{Name 1}, \todo{Name 2}, \todo{Name 3}, \todo{Name 4}, \todo{Name 5}}
+Leizhi Li,	
+Doanh Nguyen,	
+Uma Upasani,	
+Evan Lee}
 \date{}
 
 \makeatletter
@@ -42,182 +60,120 @@
 \vspace{-0.3in}
 
 \begin{abstract}
-\noindent The 2026 midterm elections are over, and a new Senate takes office in January. How predictable are
-senators, and how much does the last Senate tell us about the next one? We study this with every roll-call vote of
-the 117th and 118th Senates (Voteview, 100 senators each), using four graphical models: a latent-class Naive Bayes
-model learned with EM, a Chow-Liu tree with exact belief propagation, a sparse Ising model learned by
-$\ell_1$-regularized pseudo-likelihood and queried with Gibbs sampling and mean-field, and a hidden Markov model that
-lets the vote type follow a chain over the calendar, learned with Baum-Welch. We build everything from scratch and
-check it against brute-force enumeration. Hidden ``vote types'' give the most trustworthy probabilities: treated
-independently, they already beat the pairwise models (test NLL 0.136 per vote), and chaining them in time lowers this
-to 0.130. Mean-field is fast but overconfident when senators are tightly linked, EM copes with missing votes far better than
-filling them in, and a model trained on one Senate predicts the next almost as well as one trained on it
-directly.\footnote{Code and data: \url{https://github.com/TristoneLee/senate-pgm}.}
+The 2026 midterm elections have just ended, and a new Senate will take office in January. We wanted to see how well we could predict a senator's vote from the votes of other senators, and whether patterns learned from one Senate would still work for the next. We used roll-call votes from the 117th and 118th Senates (Voteview, 100 senators each) and built 4 probabilistic graphical models: a latent-class model that groups roll calls into hidden vote types, a Chow-Liu tree that connects senators through a simple network, a sparse Ising model that allows more connections, and a hidden Markov model (HMM) that lets the vote type of one roll call depend on the one before it. Among the models that look at one roll call at a time, the latent-class model gave the most reliable predicted probabilities: with six vote types, it reached a test negative log-likelihood (NLL) of 0.136 per vote. Adding the order of roll calls with the HMM lowered this further, to 0.130.
+
 \end{abstract}
 
 \section{Problem Description}
-Every election reshuffles the Senate, yet a lot about how it votes stays the same: most senators vote with their
-party, a few moderates cross over, and two senators from the same state often vote together. With the 2026 midterms
-just finished and a new Senate arriving in January, it is a good moment to ask how much of this a probabilistic model
-can actually capture.
+Even when the people in the Senate change, some voting patterns remain familiar. Senators often vote with their party, but some cross party lines or vote differently on particular issues. Our project will explore if a model can learn these patterns from actual votes instead of being told each senator's party.
 
-We treat each senator's vote on a roll call as a yes/no random variable. These variables are clearly not
-independent, and some are missing because senators skip votes. We ask three questions:
+For one roll call, we represent each senator's vote as a random variable: Yea ($+1$) or Nay ($-1$). We cannot simply treat the votes as unrelated. For example, learning that several senators support a bill may tell us something about how others will vote. Some votes are also missing when senators are absent or do not vote.
+
+Our project focuses on three questions:
 \begin{itemize}
-\item \textbf{Q1 (prediction):} if we see how some senators voted, how well can we guess everyone else? Formally, we
-want $P(X_i=\text{Yea}\mid\mathbf{x}_O)$ for every senator $i$ whose vote we have not seen.
-\item \textbf{Q2 (structure):} what kind of dependence explains the votes best: a few hidden vote types, a tree of
-pairwise links, or a web of pairwise links that may contain loops? Does the order of roll calls matter? And what
-does each model learn?
-\item \textbf{Q3 (transfer):} does a model learned on one Senate still work on the next?
+\item \textbf{Q1: Can we predict votes?} After seeing the votes of some senators, can we estimate the chance that another senator votes Yea? In notation, this is $P(X_i=\text{Yea}\mid\mathbf{x}_O)$, where $\mathbf{x}_O$ means the votes we already know.
+\item \textbf{Q2: What relationships do the models learn?} We compare three ways to represent voting patterns: shared hidden vote types, a tree of connections between senators, and a larger network that can contain loops. We also ask whether the order of roll calls matters, by letting the hidden vote types follow each other in time.
+\item \textbf{Q3: Do these patterns last?} If we train a model on one Senate, can we use it to predict votes in the next Senate?
 \end{itemize}
-These questions use the core tools of the course: stating independence assumptions, learning with and without
-missing data (MLE vs.\ EM), and choosing between exact and approximate inference. We care more about what each model
-gets right and wrong than about squeezing out accuracy. Senate votes have been used the same way to test sparse
-graphical models~\cite{banerjee2008}, and political scientists model them with spatial ``ideal point'' models such
-as NOMINATE~\cite{poole1985} and its Bayesian counterparts~\cite{clinton2004}.
 
 \section{Data Sourcing and Processing}
-We use the Voteview roll-call database~\cite{voteview} for the 117th (2021--22) and 118th (2023--24) Senates:
-individual votes, member metadata (party, state, NOMINATE scores) and roll-call metadata (date, vote question).
-Each senator is a variable $X_i\in\{-1,+1\}$ (Nay/Yea) and each roll call is one sample.
+We downloaded roll-call votes and senator information from Voteview~\cite{voteview} for the 117th Senate (2021--22) and the 118th Senate (2023--24). Each row of our dataset is one roll call, and each column represents one senator. We use $X_i=+1$ for Yea and $X_i=-1$ for Nay.
 \begin{itemize}
-\item \textbf{Vote coding.} Cast codes 1--3 $\to$ Yea, 4--6 $\to$ Nay, 7--9 (present / not voting) and 0 (not
-serving) $\to$ missing. Rows belonging to the Vice President's tie-breaking votes are dropped.
-\item \textbf{Identity.} Senators are keyed by \texttt{bioguide\_id}, so a party switcher (e.g.\ Manchin, D$\to$I)
-stays one variable instead of two half-missing ones.
-\item \textbf{Filtering.} We drop near-unanimous roll calls (minority $<2.5\%$; 949$\to$906 and 691$\to$659),
-which carry almost no information about dependencies, and senators present for under half of the roll calls,
-leaving 100 senators per Congress.
-\item \textbf{Splits.} Roll calls are split 80/20 by date into train and test (118th: 527/132). Hyper-parameters
-are chosen on a \emph{validation} split (the last 20\% of training) and models are then refit on all training data,
-so the test split is never used for any decision.
-\item \textbf{Missing data.} The remaining missing rate is 3.9\% (117th) and 5.2\% (118th). We assume votes are
-missing at random~\cite{rubin1976}; this is a simplification, because strategic absences exist.
+\item \textbf{Turning vote codes into data.} Voteview codes 1--3 become Yea and 4--6 become Nay. Codes 7--9 (present or not voting) and 0 (not serving) are treated as missing, rather than being guessed. We remove the Vice President's tie-breaking votes.
+\item \textbf{Keeping senator identities consistent.} We identify senators using \texttt{bioguide\_id}. This means a senator who changes party, such as Manchin (D$\to$I), still counts as the same person.
+\item \textbf{Removing votes with little information.} If fewer than 2.5\% of votes are on the minority side, that roll call tells us little about which senators vote together. Removing these leaves 906 of 949 roll calls in the 117th and 659 of 691 in the 118th. We also remove senators who appear in fewer than half the roll calls, leaving 100 senators in each Congress.
+\item \textbf{Separating training and testing.} We split roll calls by date: the first 80\% train the models and the final 20\% test them (527 training and 132 test roll calls for the 118th). We set aside the last 20\% of the training portion for validation, which is where we choose model settings. We then retrain on all training data. We do not use test results to select those settings.
+\item \textbf{Handling missing votes.} After cleaning, 3.9\% of votes in the 117th and 5.2\% in the 118th are missing. We assume the missingness is random once the available data are taken into account~\cite{rubin1976}. This is convenient for modeling, but it may not always hold because some absences are strategic.
 \end{itemize}
-Party, state and NOMINATE scores are \emph{never} model inputs; they are used only to interpret what was learned.
-91 senators passed the filters in both Congresses and are used for the transfer experiment.
-\textbf{Limitations:} a Congress has only $\sim$700--900 informative roll calls against $\binom{100}{2}=4950$
-possible pairwise interactions, so the pairwise model needs strong regularization.
+
+We use party, state, and NOMINATE ideology scores only \emph{after} training, to understand the patterns the models find. The models do not receive those labels as inputs. For the experiment comparing Congresses, we use the 91 senators who passed our filters in both.
+
+One challenge is the amount of data. We have roughly 700--900 informative roll calls per Senate, but 100 senators give $\binom{100}{2}=100\cdot99/2=4950$ possible pairs. That is a lot of relationships to estimate, so our third model needs a way to avoid learning too many unnecessary connections.
 
 \section{Modeling and Inference}
-M1--M3 describe the same 100 yes/no variables, one per senator, for a single roll call; they differ only in how votes
-may depend on each other. M4 extends M1 across the date-ordered sequence of roll calls. For each model we state the
-assumption, how it is learned, and how it answers queries. Full update equations are in Appendix~\ref{app:alg}.
+The first three models work with the same set of 100 Yea/Nay variables for a single roll call. They differ in how they explain the relationships between votes. The fourth model extends M1 across the whole sequence of roll calls. Below, we explain the main idea behind each model, how we learn it from data, and how we use it to predict an unseen vote. The more detailed update equations are in Appendix~\ref{app:alg}.
 
 \subsection{M1: Latent-class Naive Bayes}
-Each roll call has a hidden \emph{vote type} $Z\in\{1,\dots,K\}$ (for example ``a Democratic-backed party-line
-vote''), and given the type, senators vote independently:
+Our first model starts with the idea that not all roll calls are alike. Some are mostly supported by Democrats, some by Republicans, and others receive support from both sides. We represent this with a hidden variable $Z$ that assigns each roll call to one of $K$ \emph{vote types}. The types are learned from votes; we do not assign them using party labels.
+
+Once we know the vote type, the model treats each senator's choice as independent of the others. This is a simplifying assumption: senators are not actually independent, but the shared vote type can explain much of their apparent agreement.
 \begin{equation}
 P(z,\mathbf x)=\pi_z\prod_{i=1}^{N}P(x_i\mid z),\qquad \theta_{iz}=P(X_i{=}{+}1\mid Z{=}z).
 \end{equation}
+Here $\pi_z$ is how often vote type $z$ occurs, and $\theta_{iz}$ is the probability that senator $i$ votes Yea on that type. The product multiplies the probabilities of all senators' votes \emph{given} the type.
 \begin{itemize}
-\item \textbf{Assumption.} All dependence between senators comes from the type of vote. A missing vote simply drops
-out of the product, so it is marginalized exactly.
-\item \textbf{Learning: EM}~\cite{dempster1977}. The E-step computes each roll call's posterior over types from its
-observed votes, $\gamma_{mk}=P(Z^{(m)}{=}k\mid\mathbf x^{(m)}_O)$. The M-step re-estimates $\pi$ and $\theta$ as
-$\gamma$-weighted vote frequencies with +1 (Laplace) pseudo-counts. We use 10 random restarts and check that the
-objective never decreases.
-\item \textbf{Inference: exact, $O(KN)$.} $P(X_i{=}{+}1\mid\mathbf x_O)=\sum_k\gamma_k\,\theta_{ik}$.
+\item \textbf{Learning with EM.} We do not know each roll call's type, so we use expectation-maximization (EM)~\cite{dempster1977}. First, the E-step estimates how likely each type is for each roll call; these probabilities are called $\gamma_{mk}$. Then the M-step updates each type's frequency $\pi_k$ and each senator's Yea probability $\theta_{ik}$ using those estimates as weights. We repeat these two steps until the model stops improving. We add small Laplace pseudo-counts to avoid probabilities becoming exactly zero or one, and run 10 random restarts.
+\item \textbf{Missing votes.} If a senator did not vote, we leave that senator out of the product for that roll call. This is called \emph{marginalizing} the missing vote: we account for the unknown outcome instead of pretending we know it.
+\item \textbf{Making a prediction.} If we observe a few senators' votes, we first update the probabilities of the vote types. Then we take a weighted average of senator $i$'s Yea probabilities:
+\begin{equation}
+P(X_i{=}{+}1\mid\mathbf x_O)=\sum_{k=1}^{K}\gamma_k\theta_{ik}.
+\end{equation}
+This calculation is exact for M1 and takes $O(KN)$ work to find predictions for all senators.
 \end{itemize}
 
 \subsection{M2: Chow-Liu tree Bayesian network}
-M2 drops the hidden variable and links senators directly, but keeps only a tree of links so that inference stays
-exact:
+The second model connects senators directly rather than explaining votes through a hidden type. To keep the network manageable, we use a \emph{tree} where one senator as the root; every other senator has one parent in the tree.
 \begin{equation}
 P(\mathbf x)=P(x_r)\prod_{i\ne r}P(x_i\mid x_{\mathrm{pa}(i)}).
 \end{equation}
+This says that we start with the root's vote probability, then multiply each other senator's probability given their parent's vote. In this model, once we know a senator's parent, that senator is independent of the parent's other branches and other non-descendants. 
 \begin{itemize}
-\item \textbf{Assumption.} Given its parent's vote, a senator's vote is independent of all non-descendants in the
-tree.
-\item \textbf{Learning.} \emph{Structure:} the maximum-weight spanning tree on pairwise mutual information is the
-maximum-likelihood tree~\cite{chowliu1968}. We estimate mutual information from the roll calls where both senators
-voted and find the tree with Prim's algorithm. \emph{Parameters:} conditional probability tables by available-case
-MLE (+1 Laplace), or by EM when votes are missing.
-\item \textbf{Inference: exact sum-product belief propagation, $O(N)$.} One upward and one downward pass per roll
-call give every senator's posterior and $\log P(\mathbf x_O)$; the same marginals form EM's E-step.
+\item \textbf{Finding the tree.} For each pair of senators, we calculate \emph{mutual information}: a score of how much knowing one person's vote tells us about the other's. We calculate it using roll calls where both voted. The Chow-Liu method~\cite{chowliu1968} chooses the tree with the largest total mutual information, using Prim's algorithm. We then estimate the conditional voting probabilities from the data, with Laplace smoothing; we also test EM for missing data.
+\item \textbf{Making a prediction.} We use \emph{belief propagation}, which passes information along the tree. An upward pass collects evidence from the leaves, and a downward pass spreads that evidence back through the other branches. After both passes, we can calculate the probability of Yea for every senator, even when many votes are unknown. Because the graph has no loops, these answers are exact and require $O(N)$ work per roll call.
 \end{itemize}
 
 \subsection{M3: Sparse Ising model (pairwise Markov network)}
-A tree cannot contain loops, such as three moderates who all vote together. M3 allows any sparse set of pairwise
-links:
+A tree forces each senator to have only one path to every other senator. But voting relationships can form triangles or larger groups. Our third model, the \emph{Ising model}, allows those extra links while keeping the network sparse (meaning most possible links are left out).
 \begin{equation}
 P(\mathbf x)=\frac{1}{Z(\theta,W)}\exp\Big(\sum_i\theta_ix_i+\sum_{i<j}W_{ij}x_ix_j\Big),\qquad x_i\in\{-1,+1\}.
 \end{equation}
-Here $\theta_i$ is senator $i$'s baseline lean toward Yea, and $W_{ij}>0$ ($<0$) means $i$ and $j$ tend to agree
-(disagree).
+There are three important parts of this equation. The term $\theta_ix_i$ describes senator $i$'s overall tendency toward Yea or Nay. The term $W_{ij}x_ix_j$ describes how a pair votes together: a positive $W_{ij}$ favors agreement, while a negative value favors disagreement. Finally, $Z(\theta,W)$ is a normalizing constant that makes all vote-pattern probabilities add up to one. In this network, a senator's vote depends directly only on their connected neighbors once those neighbors' votes are known.
 \begin{itemize}
-\item \textbf{Assumption.} Given its neighbors' votes, a senator's vote is independent of everyone else; only
-pairwise interactions exist.
-\item \textbf{Learning: $\ell_1$-penalized pseudo-likelihood}~\cite{besag1975,ravikumar2010}. The normalizer
-$Z(\theta,W)$ sums over $2^{100}$ vote patterns, so exact maximum likelihood is impossible. Instead we fit each
-senator's vote given everyone else's, $P(x_i\mid\mathbf x_{-i})=\sigma\big(2x_i(\theta_i+\sum_jW_{ij}x_j)\big)$,
-with a penalty $\lambda\sum_{i<j}|W_{ij}|$ that sets most couplings to zero. The objective is convex, and we solve it
-with FISTA~\cite{beck2009}. Missing votes enter as $x_j=0$.
-\item \textbf{Inference: approximate.} With the observed votes fixed, we use \emph{Gibbs
-sampling}~\cite{geman1984} (4 chains with burn-in) and \emph{naive mean-field}~\cite{wainwright2008}
-($\mu_i\leftarrow\tanh(\theta_i+\sum_jW_{ij}\mu_j)$). For a 16-senator model we also enumerate all $2^{16}$ states
-exactly, which serves as ground truth in E1.
+\item \textbf{Learning without an impossible sum.} Finding the exact normalizing constant involves considering $2^{100}$ possible Yea/Nay patterns, which may not be feasible; thus, by pseudo likelihood, we fit each senator's vote \emph{conditional on all the others}~\cite{besag1975,ravikumar2010}:
+\begin{equation}
+P(x_i\mid\mathbf x_{-i})=\sigma\Big(2x_i(\theta_i+\sum_jW_{ij}x_j)\Big).
+\end{equation}
+Here $\sigma(t)=1/(1+e^{-t})$ converts a score into a probability. We add an $\ell_1$ penalty, $\lambda\sum_{i<j}|W_{ij}|$, which pushes weak links to zero. Larger $\lambda$ means fewer links. We optimize the resulting convex objective using FISTA~\cite{beck2009}. In this fitting procedure, missing input votes are represented by 0.
+\item \textbf{Making a prediction.} Because this network contains loops, the same simple exact method used for the tree does not work. We compare two approximations. \emph{Gibbs sampling} repeatedly samples unknown votes using the current values of other votes; averaging over many samples estimates each senator's Yea probability~\cite{geman1984}. \emph{Mean-field} instead keeps an average vote value $\mu_i$ for each senator and repeatedly updates it with
+\begin{equation}
+\mu_i\leftarrow\tanh\Big(\theta_i+\sum_jW_{ij}\mu_j\Big).
+\end{equation}
+Mean-field is faster and thus more practical for this project, but its averages can sometimes miss how strongly votes depend on one another~\cite{wainwright2008}. We also fit a smaller 16-senator model to check how accurate our approximations are.
 \end{itemize}
 
 \subsection{M4: Hidden Markov model over roll calls}
-M1--M3 treat roll calls as independent samples, but the Senate floor works in sequence: a cloture vote is usually
-followed by the confirmation vote on the same nominee, and amendment votes come in bursts. M4 keeps M1's model of a
-single roll call and lets the vote types of consecutive roll calls $t=1,\dots,T$ (ordered by date) form a Markov chain:
+M1--M3 treat every roll call as a separate sample, as if the order of votes did not matter. But the Senate votes in sequence: a cloture vote on a nominee is usually followed by the confirmation vote on the same nominee, and amendment votes often come in long runs. Our fourth model keeps M1's idea of hidden vote types, but lets the type of each roll call depend on the type of the roll call before it. We order the roll calls by date, $t=1,\dots,T$:
 \begin{equation}
 P(\mathbf z,\mathbf x)=\pi_{z_1}\prod_{t>1}A_{z_{t-1}z_t}\prod_{t=1}^{T}\prod_{i=1}^{N}P(x_{ti}\mid z_t).
 \end{equation}
+Here $\pi$ gives the probabilities of the first roll call's type, and $A_{jk}$ is the probability that a roll call of type $j$ is followed by one of type $k$. The last product is exactly M1's model of a single roll call. Given its vote type, a roll call's votes do not depend on anything else, and the type depends on the past only through the previous roll call's type. If every row of $A$ equals $\pi$, the previous type tells us nothing, and M4 becomes exactly M1.
 \begin{itemize}
-\item \textbf{Assumption.} Given its vote type, a roll call's votes are independent of everything else, and the vote
-type depends on the past only through the previous roll call's type. If every row of $A$ equals $\pi$, M4 is
-exactly M1.
-\item \textbf{Learning: EM (Baum-Welch)}~\cite{rabiner1989}. The E-step runs scaled forward-backward over the whole
-training sequence to get each roll call's posterior $\gamma_{tk}$ and the expected transition counts; the M-step
-updates $\theta$ as in M1 and $A$ from the transition counts plus Dirichlet pseudo-counts $1+\kappa[j{=}k]$
-($\kappa>0$ favors staying in the same type). 10 random restarts; the objective never decreases.
-\item \textbf{Inference: exact filtering, $O(K^2)$ per roll call.} To predict roll call $t$ we use only earlier roll
-calls and the votes revealed at $t$:
-$P(Z_t\mid\mathbf x_{1..t-1},\mathbf x_{t,O})\propto P(Z_t\mid\mathbf x_{1..t-1})\,P(\mathbf x_{t,O}\mid Z_t)$, then
-predict as in M1. Earlier votes are public once cast, so this is the realistic online setting; it is also
-information the other models do not use, which E3 controls for.
+\item \textbf{Learning with EM (Baum-Welch).} The vote types are still hidden, so we again use EM, in the version for HMMs known as Baum-Welch~\cite{rabiner1989}. The E-step runs the \emph{forward-backward} algorithm over the whole training sequence. It gives the probability of each type for each roll call, and also the expected number of times type $j$ is followed by type $k$. The M-step updates each senator's Yea probabilities as in M1, and updates $A$ from those expected counts. We add pseudo-counts to $A$; an optional extra count $\kappa$ on staying in the same type makes long runs of one type more likely. As for M1, we run 10 random restarts and check that the objective never decreases.
+\item \textbf{Making a prediction.} To predict roll call $t$, we use only the roll calls \emph{before} it plus the votes revealed on roll call $t$ itself, never later ones. This is called \emph{filtering}:
+\begin{equation}
+P(Z_t\mid\mathbf x_{1..t-1},\mathbf x_{t,O})\propto P(Z_t\mid\mathbf x_{1..t-1})\,P(\mathbf x_{t,O}\mid Z_t).
+\end{equation}
+The first factor is what the earlier roll calls suggest about today's type; the second is how well each type explains today's revealed votes. We then predict each senator's vote as in M1. This is exact and takes $O(K^2)$ work per roll call. Because earlier votes are public once they are cast, this matches how predictions would be made during a real session. It does give M4 information the other models do not use, so we add a baseline in E3 that uses the same information.
 \end{itemize}
 
 \subsection{Implementation and verification}
-Everything is implemented in Python with NumPy/SciPy. Before touching real data, we checked every routine against
-brute force on random 6-variable models: M1 inference, M2's marginals and $\log P(\mathbf x_O)$, and Ising
-enumeration agree to $<10^{-14}$, and Gibbs (3000 sweeps) to $1.4\times10^{-3}$. M4's forward-backward, filtering and
-Viterbi decoding match enumeration of all $2^6$ hidden-state paths to $<10^{-14}$, and M4 with $A=\mathbf 1\pi^\top$
-reproduces M1 exactly. On synthetic data with 30\% of the votes missing, EM recovers M1's parameters to within 0.05,
-Baum-Welch recovers M4's $\theta$ to within 0.053 and $A$ to within 0.020, and Chow-Liu recovers 26 of 29 edges of a
-known tree (Appendix, Table~\ref{tab:checks}).
+We implemented the methods in Python using NumPy and SciPy. Before applying them to Senate data, we tested them on small, randomly generated models where we could calculate the answer by checking every possible vote pattern. On six-variable examples, M1, M2, and exact Ising calculations agreed with brute force to within $10^{-14}$; Gibbs sampling after 3000 sweeps had an average absolute error of $1.4\times10^{-3}$. For M4, forward-backward, filtering, and the most-likely sequence of types (Viterbi) matched a check of all $2^6$ possible type sequences to within $10^{-14}$, and setting every row of $A$ to $\pi$ reproduced M1 exactly. We also checked whether the learning algorithms recovered known patterns from simulated data. With 30\% missing votes, M1's estimated probabilities were within 0.05 of the true values, M4 recovered its vote probabilities to within 0.053 and its transition probabilities to within 0.020, and Chow-Liu recovered 26 out of 29 edges in a known tree (Appendix, Table~\ref{tab:checks}). These checks helped us separate implementation mistakes from actual model limitations.
 
 \section{Results and Discussion}
-We present results in three layers: \S4.1 states what each experiment shows statistically, \S4.2 compares the
-models' strengths and weaknesses, and \S4.3 collects what the models reveal about the Senate itself.
-\textbf{Hyper-parameters} were chosen on the validation split only (Appendix, Fig.~\ref{fig:selection}): $K=6$
-coalition types (validation log-likelihood is flat beyond $K=5$), and $\lambda=0.01$ / $0.02$ for M3 (117th / 118th),
-selected by NLL on the same 20\%-reveal task used in E3. For M4, $K$ and $\kappa\in\{0,10,100\}$ are chosen by the
-validation log-likelihood of the chain's continuation, $\log P(\mathbf x_{\text{val}}\mid\mathbf x_{\text{fit}})$:
-$\kappa=0$ wins in both Congresses (a sticky prior does not help), and $K=12$, the largest value tried, although
-validation log-likelihood changes by less than 0.004 beyond $K=6$. All learners converge monotonically (EM in 7--22
-iterations, FISTA in 389; Appendix, Fig.~\ref{fig:conv}).
+We ran four experiments. The first checks whether approximate inference is trustworthy. The second looks at missing votes. The third compares how well the models predict hidden votes, and the fourth tests whether a model trained on the 117th Senate still works on the 118th. 
+
+Before running the final tests, we used validation data to choose the settings that control model complexity (Appendix, Fig.~\ref{fig:selection}). For M1, we chose $K=6$ vote types; adding more than five gave little further improvement in validation log-likelihood. For M3, we chose $\lambda=0.01$ for the 117th and $0.02$ for the 118th, based on negative log-likelihood (NLL) when 20\% of votes were revealed. NLL measures how much probability the model assigns to what actually happened, so \emph{lower is better}. This matters because a model can guess the right answer frequently but still be too confident when it is wrong. For M4, we chose the number of vote types $K$ and the extra same-type count $\kappa\in\{0,10,100\}$ by how well the model predicted the validation roll calls that come right after the training part of the sequence. The extra count never helped ($\kappa=0$ in both Senates). The selected $K=12$ is the largest value we tried, but validation log-likelihood changed by less than 0.004 beyond $K=6$, so the exact choice matters little. The training procedures showed stable convergence (EM in 7--22 iterations and FISTA in 389; Appendix, Fig.~\ref{fig:conv}).
 
 \subsection{Statistical findings}
 
-\textbf{E1: How accurate is approximate inference?} We fit a 16-senator Ising model (8 D, 8 R; $\lambda=0.2$,
-max $|W_{ij}|=0.74$), clamp 4 senators on each of 132 test roll calls, query the other 12, and compare against exact
-enumeration of all $2^{16}$ states while scaling the couplings $W\to\beta W$, $\beta\in[0.1,2]$ (Fig.~\ref{fig:e1}).
+\textbf{E1: How accurate are the approximate methods?} We trained an Ising model using 16 senators (8 Democrats and 8 Republicans), with $\lambda=0.2$ and maximum $|W_{ij}|=0.74$. For each of 132 test roll calls, we revealed four senators' votes and predicted the other 12. With only 16 senators, we can calculate exact probabilities by checking all $2^{16}=65{,}536$ vote patterns. We compared these exact probabilities with Gibbs and mean-field while changing the strength of the links using $W\to\beta W$, where $\beta$ ranges from 0.1 to 2 (Fig.~\ref{fig:e1}).
 \begin{itemize}
-\item \emph{Mean-field is fast but biased, and overconfident when couplings are strong.} Its error is 0.033 at
-$\beta=1$, about 8$\times$ that of Gibbs. The absolute error falls again at $\beta=2$ (0.018) only because
-marginals saturate near 0 or 1; the KL divergence keeps rising (0.0007 at $\beta=0.5$, 0.010 at $\beta=1$,
-0.015--0.020 for $\beta\ge1.5$).
-\item \emph{Gibbs converges at the Monte Carlo rate.} At $\beta=1$ the error drops from 0.021 (10 sweeps) to 0.002
-(1000 sweeps); 300 sweeps keep it $\le0.004$ for every $\beta$, at 10--70$\times$ the cost of mean-field.
-\item \emph{Exact inference only works for tiny models}: $2^{16}$ states take under 0.1\,s, $2^{100}$ is impossible.
+\item \emph{Mean-field is quick, but can be too confident.} At normal link strength ($\beta=1$), its average probability error is 0.033, about eight times the Gibbs error. At $\beta=2$, its absolute error falls to 0.018, but this is partly because predictions are becoming very close to 0 or 1. Another measure, KL divergence, still gets worse: 0.0007 at $\beta=0.5$, 0.010 at $\beta=1$, and 0.015--0.020 for $\beta\ge1.5$. KL divergence compares whole predicted probability distributions, so this shows that the apparent improvement in absolute error is misleading.
+\item \emph{More Gibbs samples improve estimates.} At $\beta=1$, the error falls from 0.021 after 10 sweeps to 0.002 after 1000 sweeps. With 300 sweeps, error stays at or below 0.004 across all tested link strengths. This is more reliable, but takes about 10--70 times as much computation as mean-field.
+\item \emph{Exact enumeration does not scale.} Checking $2^{16}$ patterns takes under 0.1 seconds, while checking $2^{100}$ for the full Senate is not feasible.
 \end{itemize}
 
-\begin{figure}[t]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.85\linewidth]{E1_inference.pdf}
 \vspace{-6pt}
@@ -225,18 +181,22 @@ marginals saturate near 0 or 1; the KL divergence keeps rising (0.0007 at $\beta
 \label{fig:e1}
 \end{figure}
 
-\textbf{E2: How should missing votes be handled?} We hide 10/30/50\% of the 118th training votes (3 masks each)
-and measure held-out log-likelihood and accuracy on the hidden votes (Fig.~\ref{fig:e2}).
+
+
+\noindent\textbf{E2: What should we do with missing votes?} We artificially hid 10\%, 30\%, or 50\% of votes in the 118th training data, using 3 different random masks for each amount, then compared the predicted probabilities and accuracy on the hidden votes (Fig.~\ref{fig:e2}).
+
+
+
 \begin{itemize}
-\item \emph{Marginalize, do not impute.} M1 with EM barely changes (LL $-0.143\to-0.150$, accuracy $\approx0.94$
-throughout). Filling gaps with each senator's majority vote collapses at 50\% (LL $-0.184$, accuracy 0.78), because
-the fake votes erase the minority vote types.
-\item \emph{Under random masking, EM and available-case counting agree} for M2 (differences $<0.002$): both are
-consistent, and EM only adds efficiency.
-\item \emph{Stochastic EM gives M3 a small gain that grows with missingness} (0.948 vs.\ 0.940 at 50\%).
+\item \emph{Leaving a vote unknown works better than guessing it first.} M1 with EM changes very little as more votes are hidden: held-out log-likelihood goes from $-0.143$ to $-0.150$, and accuracy stays near 0.94. If we fill each gap with that senator's usual (majority) vote, performance falls sharply at 50\% missingness (log-likelihood $-0.184$, accuracy 0.78). Those made-up votes hide the less common voting patterns that the model needs to learn.
+\item \emph{Two ways of learning the tree perform similarly.} For M2, EM and counting only roll calls where the relevant votes are available differ by less than 0.002. Under the random hiding used here, both approaches work well; EM offers only a small efficiency advantage.
+\item \emph{A missing-data extension helps M3 a little.} Stochastic EM improves accuracy from 0.940 to 0.948 when half of the votes are hidden. The improvement is real but much smaller than M1's advantage over simple filling-in.
 \end{itemize}
 
-\begin{figure}[t]
+
+
+\begin{figure}[H]
+
 \centering
 \includegraphics[width=0.8\linewidth]{E2_missing.pdf}
 \caption{E2. Left: held-out log-likelihood per vote (M1, M2). Right: accuracy on the hidden training votes. Mean
@@ -244,28 +204,20 @@ $\pm$ std over 3 masks.}
 \label{fig:e2}
 \end{figure}
 
-\textbf{E3: How well can we predict hidden votes?} On each test roll call we reveal 20\% of the observed votes and
-predict the rest (5 reveals; Table~\ref{tab:e3}). Three references: each senator's training Yea rate (no
-dependencies); ``vote with your party's revealed majority'', which uses party labels the models never see; and
-``previous roll call'', where each senator repeats their last vote, which uses the same earlier-roll-call information
-as M4.
+
+
+
+
+\textbf{E3: How accurately can the models predict votes?} On each test roll call, we showed the models 20\% of the recorded votes and asked them to predict the remaining 80\%. We repeated this five times with different revealed votes (Table~\ref{tab:e3}). We also compared with three simpler baselines: predicting from each senator's usual Yea rate, predicting from the revealed majority of the senator's party, and predicting that each senator repeats their vote on the previous roll call. The second baseline uses party labels, unlike our models. The third uses the same earlier-roll-call information as M4, so it checks whether M4 is simply copying earlier votes.
 \begin{itemize}
-\item \emph{All four models capture the dependencies:} they beat the per-senator baseline by a wide margin and
-match or beat the party baseline without knowing parties.
-\item \emph{Accuracy ties, calibration does not.} Accuracies are within 0.006 of each other. Among the models of a
-single roll call, M1 has the lowest NLL in both Congresses (0.170 / 0.136); M4 lowers it further, to 0.166 / 0.130,
-and beats M1 on all 10 paired reveals (by 0.002--0.009). M3 with Gibbs and M4 share the best 118th accuracy (0.949).
-\item \emph{Order helps, but not by copying.} Repeating the previous vote reaches only 0.745 / 0.885 accuracy, so
-M4's gain comes from learning which vote type tends to follow which, not from senators repeating themselves. The
-gain is small, likely because the 20\% of revealed votes already pin down most roll calls' type.
-\item \emph{Errors concentrate on cross-cutting votes}: 0.97 accuracy (M1--M3) on the 112 party-line roll calls vs.\
-0.83--0.84 on the 20 cross-cutting ones.
-\item \emph{The selection criterion mattered more than the sampler} (Appendix, Table~\ref{tab:diag}): 10$\times$
-more Gibbs sweeps change NLL by $<0.004$, while choosing $\lambda$ by pseudo-likelihood ($\lambda=0.05$) drops M3 to
-0.912 / 0.233 in the 117th.
+\item \emph{All four graphical models learn useful voting relationships.} Each performs much better than using a senator's usual Yea rate alone. Their predictions are also similar to, or better than, the party-based baseline, even though the models never receive party labels.
+\item \emph{Similar accuracy does not mean equally good probabilities.} The models' accuracy scores differ by less than 0.006. Among the models that look at one roll call at a time, M1 has the lowest NLL in both Senates (0.170 for the 117th and 0.136 for the 118th). In other words, M1 is better at assigning sensible probabilities, not just picking Yea or Nay. M4 lowers the NLL further, to 0.166 and 0.130, and beats M1 on all 10 paired reveals (by 0.002--0.009). M3 with Gibbs and M4 share the highest accuracy in the 118th (0.949). The table also includes AUC, which measures how well a model ranks Yea votes above Nay votes; higher is better.
+\item \emph{The order of roll calls helps, but not by copying.} Repeating each senator's previous vote reaches only 0.745 accuracy in the 117th and 0.885 in the 118th. So M4's gain comes from learning which kinds of votes tend to follow which, not from senators repeating themselves. The gain is small, likely because 20\% of a roll call's votes already reveal most of its vote type.
+\item \emph{Unusual votes are much harder.} For M1--M3, accuracy is about 0.97 on 112 party-line roll calls, but only 0.83--0.84 on the 20 votes that cut across party lines. That makes sense: the common patterns are easier to learn than rare exceptions.
+\item \emph{Choosing the right model setting mattered more than running Gibbs longer.} Increasing the number of Gibbs sweeps tenfold changes NLL by less than 0.004. But choosing $\lambda$ based on the training pseudo-likelihood rather than the actual prediction task lowers M3's 117th-Senate accuracy to 0.912, with NLL 0.233 (Appendix, Table~\ref{tab:diag}).
 \end{itemize}
 
-\begin{table}[t]
+\begin{table}[H] 
 \centering\small
 \caption{E3. Prediction of the 80\% hidden votes on test roll calls (mean over 5 reveals; std $\le0.003$ accuracy,
 $\le0.015$ NLL). M4 and ``previous roll call'' also use the full votes of earlier test roll calls.}
@@ -288,19 +240,14 @@ M4 HMM (Baum-Welch, filtering) & \textbf{0.934} & \textbf{0.166} & \textbf{0.982
 \end{tabular}
 \end{table}
 
-\textbf{E4: Does a model carry over to the next Senate?} We use the 91 senators who served in both Congresses
-(Fig.~\ref{fig:e4}).
+\textbf{E4: Can we reuse a model in the next Senate?} We compared the 91 senators who appear in both Congresses, using the 117th to predict votes in the 118th (Fig.~\ref{fig:e4}).
 \begin{itemize}
-\item \emph{Direct transfer is almost free.} Trained only on the 117th, the models predict the 118th test votes about
-as well as models trained on the 118th (NLL: M1 0.143 vs.\ 0.140, M2 0.167 vs.\ 0.172, M3 0.175 vs.\ 0.200).
-Keeping M1's 117th $\theta$ and refitting only the mix $\pi$ gives 0.141.
-\item \emph{A prior from the previous Senate replaces most of the data.} With 10 roll calls of the 118th, M1 scores
-0.280 without a prior and 0.144 with the $s{=}100$ prior; without it, 200--527 roll calls are needed to get there.
-Prior plus all data is the best M1 variant (0.136).
-\item \emph{The prior must be strong enough}: with $s{=}10$, EM drifts away from the good start on 25--100 roll calls.
+\item \emph{The earlier Senate is already a strong starting point.} Models trained only on the 117th perform about as well on 118th test votes as models trained on the 118th itself. Their NLL values are 0.143 versus 0.140 for M1, 0.167 versus 0.172 for M2, and 0.175 versus 0.200 for M3. For M1, even keeping each senator's voting tendencies fixed and only updating how common the vote types are gives NLL 0.141.
+\item \emph{Earlier data help most when new data are limited.} We can treat M1's 117th parameters as a \emph{prior}, meaning a starting belief that the 118th data can update. With just 10 new roll calls, NLL is 0.280 without a prior, versus 0.144 with a prior strength of $s=100$. Without that prior, roughly 200--527 new roll calls are needed to reach similar performance. Using the prior and all available data gives NLL 0.136.
+\item \emph{The prior needs enough weight.} When the prior strength is only $s=10$, training on 25--100 new roll calls can pull the model away from its better starting point. Here $s$ controls how much the older Senate influences the estimates compared with the new observations.
 \end{itemize}
 
-\begin{figure}[t]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.8\linewidth]{E4_transfer_curve.pdf}
 \caption{E4. Prediction NLL on 118th test roll calls vs.\ number of 118th training roll calls, with and without the
@@ -309,13 +256,13 @@ Prior plus all data is the best M1 variant (0.136).
 \end{figure}
 
 \subsection{Model strengths and weaknesses}
-Table~\ref{tab:models} summarizes when each model is the right tool. The key structural point: a single hidden vote
-type influences every senator at once, and once it is summed out, all 100 votes depend on each other. M1 represents
-this directly with one variable; a sparse pairwise model can only approximate it with many couplings, which is why
-M3 matches M1's accuracy but not its calibration. M4 keeps this structure and adds memory across roll calls, which
-buys a small but consistent further gain in calibration.
+Each model was useful for a different reason (Table~\ref{tab:models}). M1 is our best predictor among the models of a single roll call because one hidden vote type can describe a pattern shared by many senators at once. Even though the senators are treated as independent \emph{after} we know the type, their votes become related when the type is unknown. M2 is easier to calculate with, but its tree cannot represent every relationship. M3 allows more detailed links between senators, which helps describe specific voting pairs, but estimating all those links is harder and its approximate probabilities are less reliable. M4 keeps M1's vote types and adds memory from one roll call to the next, which gives a small but consistent further improvement when earlier votes are available.
 
-\begin{table}[t]
+An important distinction is \emph{accuracy versus calibration}. Accuracy asks whether the model chose the correct side. Calibration asks whether the probabilities are trustworthy: predictions made with 90\% confidence should be right roughly 90\% of the time. Our NLL results suggest that M1 handles this second goal better than M2 and M3, even when M3 matches or slightly exceeds its accuracy, and that M4 improves on it slightly.
+
+
+
+\begin{table}[H] 
 \centering\small
 \caption{Strengths and weaknesses of the four models, with the evidence from our experiments.}
 \label{tab:models}
@@ -323,14 +270,15 @@ buys a small but consistent further gain in calibration.
 \toprule
 & \textbf{M1 latent class} & \textbf{M2 Chow-Liu tree} & \textbf{M3 sparse Ising} & \textbf{M4 HMM}\\
 \midrule
-Strengths & best calibration of the single-roll-call models; readable vote types; robust to missing data; transfers with a prior & exact $O(N)$ inference; cheapest; quick overview of the party structure & finds specific alliances; best on the Collins--Murkowski pair (0.65 vs.\ 0.50); top 118th accuracy & lowest NLL overall; exact inference; contains M1 as a special case\\
-Weaknesses & fails on votes unlike any of its $K$ types; no senator-to-senator links & only 6 cross-party edges, so evidence passes between parties through very few links & approximate inference only; mean-field overconfident; $\lambda$ must be tuned to the task & needs earlier roll calls' votes; small gain; $K$ selection is flat\\
+Strengths & best calibration of the single-roll-call models; readable vote types; robust to missing data; transfers with a prior & exact $O(N)$ inference; cheapest; quick overview of the party structure & finds specific alliances; best on the Collins--Murkowski pair (0.65 vs.\ 0.50); top 118th accuracy & lowest NLL overall; exact inference; includes M1 as a special case\\
+Weaknesses & fails on votes unlike any of its $K$ types; no senator-to-senator links & only 6 cross-party edges, so evidence passes between parties through very few links & approximate inference only; mean-field overconfident; $\lambda$ must be tuned to the task & needs earlier roll calls' votes; small gain; choice of $K$ is flat\\
 Use it for & default predictor; missing data; new Senates & fast exact queries & studying who votes with whom & live prediction during a session\\
 \bottomrule
 \end{tabularx}
 \end{table}
 
-\begin{figure}[t]
+
+\begin{figure}[H] 
 \centering
 \begin{minipage}[c]{0.44\linewidth}\centering
 \includegraphics[width=\linewidth]{m1_theta_heatmap.pdf}\\[-2pt]{\small (a)}
@@ -346,30 +294,17 @@ senators are labeled.}
 \end{figure}
 
 \subsection{What the models reveal about the Senate}
-None of these findings used party or state labels during training; the labels were only used to read the results.
+These patterns came from vote data alone. We used party, state, and ideology information only afterward to make sense of what the models learned.
 \begin{itemize}
-\item \textbf{A few vote types describe most roll calls} (Fig.~\ref{fig:m1}a). The largest type (46\% of roll calls)
-is a Democratic-backed party-line vote; 229 of its 243 training roll calls are nominations or cloture motions, i.e.\
-confirmation fights. The mirror image (18\%) is Republican-backed, mostly amendments and resolutions of disapproval.
-Two bipartisan types are opposed only by shrinking conservative wings, and two small ``fringe'' types capture a
-populist/libertarian right voting Yea alone and progressive Democrats voting Nay alone.
-\item \textbf{Bridges between the parties are rare.} Only 6 of the 99 tree edges cross party lines (Fig.~\ref{fig:graphs}).
-\item \textbf{Home-state pairs vote together.} 6 of the 10 strongest Ising couplings join the two senators of one
-state (Crapo--Risch $W=1.99$, Reed--Whitehouse, Boozman--Cotton, Cantwell--Murray, Heinrich--Luj\'an,
-Cramer--Hoeven).
-\item \textbf{The swing senators are the hard cases.} Collins and Murkowski are the least predictable senators
-(Fig.~\ref{fig:m1}b; M1 is right only half the time). They are tightly coupled to each other ($W=0.87$, the strongest
-cross-ideology pair), which is why M3 does better on them. Graham is next (0.80).
-\item \textbf{The left flank is the blind spot.} The hardest test roll call was the 17--79 vote of Nov.~20, 2024 on
-blocking an arms-export license to Israel: 15 Democrats and 2 Independents voted Yea, no Republicans did. M1 has no
-``progressive-only'' vote type, because such revolts are rare, so it treated the vote as a right-fringe revolt and
-got 68\% of it right.
-\item \textbf{Senators' positions are stable; the agenda changes.} Refitting only how often each vote type occurs
-recovers almost all of the transfer gap (E4). For the Senate seated in January 2027, models of returning senators
-are usable from day one; only newcomers need new data.
+\item \textbf{Most roll calls fit a small number of patterns} (Fig.~\ref{fig:m1}a). M1's largest vote type covers 46\% of roll calls and mainly represents Democratic-backed party-line votes. Of its 243 training roll calls, 229 are nominations or cloture motions (votes about bringing debate to a close). The second-largest type (18\%) is mostly Republican-backed, including amendments and resolutions of disapproval. Other types capture bipartisan support or smaller groups voting against their usual side.
+\item \textbf{The two parties are connected by relatively few tree edges.} In M2, only 6 of the 99 edges join senators from different parties (Fig.~\ref{fig:graphs}). This helps explain why the tree separates into strongly connected party groups.
+\item \textbf{Senators from the same state often vote similarly.} Six of the ten strongest positive Ising links connect two senators from one state. Examples include Crapo--Risch ($W=1.99$), Reed--Whitehouse, Boozman--Cotton, Cantwell--Murray, Heinrich--Luj\'an, and Cramer--Hoeven. A strong positive $W$ indicates agreement in the model, not necessarily that one senator causes the other to vote a certain way.
+\item \textbf{Moderates are harder to predict.} Collins and Murkowski have the lowest individual prediction accuracy for M1 (around 0.50), but M3 performs better on this pair. Their Ising connection is strong ($W=0.87$), making it useful for a model that represents direct pairwise links. Graham is another difficult case, at 0.80 accuracy.
+\item \textbf{Rare votes reveal what M1 misses.} One especially difficult roll call was the 17--79 vote on November 20, 2024, about blocking an arms-export license to Israel. Fifteen Democrats and two Independents voted Yea, while no Republicans did. Because this pattern was rare in training, M1 confused it with a different kind of small-group opposition and got only 68\% of the vote predictions right.
+\item \textbf{Voting tendencies change less than the topics being voted on.} In E4, keeping M1's senator-level voting probabilities from the 117th and updating only the frequencies of vote types worked almost as well as retraining the whole model. This suggests that for the Senate beginning in January 2027, earlier votes may be useful for returning senators, while newcomers will require new observations.
 \end{itemize}
 
-\begin{figure}[t]
+\begin{figure}[H] % *** EDITED: fixed placement ***
 \centering
 \includegraphics[width=0.82\linewidth]{graphs_tree_ising.pdf}
 \vspace{-6pt}
@@ -381,59 +316,12 @@ are usable from day one; only newcomers need new data.
 
 \section{Conclusion and Limitations}
 \subsection{Conclusion}
-Hidden vote types are the most useful structure. The simplest model, a latent class with six vote types, is the best
-default: of the single-roll-call models it gives the best-calibrated predictions, its vote types are easy to read, it
-handles missing votes cleanly through EM, and it carries over to a new Senate almost without loss. Letting the vote
-type follow a Markov chain over the calendar (the HMM) improves calibration a little further on every reveal, when
-the votes of earlier roll calls are available. The Chow-Liu tree offers cheap exact inference but links the
-parties through only a few edges. The sparse Ising model finds specific alliances, such as home-state pairs and
-Collins--Murkowski, and matches the others' accuracy once its sparsity is tuned to the task, but it is less well
-calibrated and needs approximate inference. Methodologically, mean-field is fast but overconfident under strong
-coupling, missing votes should be marginalized rather than imputed, and hyper-parameters should be chosen with the
-score of the reported task. Politically, Senate voting is dominated by party-line confirmation fights plus a few
-recurring patterns; senators' positions persist across Congresses, and the hard votes come from a few swing senators
-and rare revolts on either flank.
+Our main result is that a fairly simple model can describe Senate voting surprisingly well. Of the models that look at one roll call at a time, M1's six hidden vote types gave the most reliable predicted probabilities. It also dealt well with missing votes and transferred well from the 117th to the 118th Senate. Letting the vote types follow each other in time (M4) improved the probabilities a little further on every test, as long as the votes of earlier roll calls are known. M2 was useful because its tree allowed fast, exact predictions. M3 showed more specific relationships, such as pairs of senators from the same state and the Collins--Murkowski connection, but its results depended more on choosing a good sparsity setting and using approximate inference carefully.
+
+A few takeaways from our experiments. First, we noticed that a mean-field tends to be too confident when connections were strong. Second, it's better to account for unknown votes than to fill them with guesses before training. Third, we should choose model settings based on the actual prediction problem, not just on how well the training objective is optimized. 
 
 \subsection{Limitations}
-We assume votes are missing at random, although absences can be strategic. M1--M3 treat roll calls as independent,
-and M4 uses only their order, not their content; M4 was also not included in E2 or E4, and its validation curve is so
-flat that $K$ settled at the largest value tried. Only 20 test roll calls are cross-cutting, so conclusions about
-them are noisy, and E1 uses a single 16-senator model. Natural extensions are a latent class plus sparse residual
-couplings, and bill content as an observed parent of $Z$ (in M4, an input to the transition model).
-
-\section{Reflections \& Contributions}
-\textbf{Iteration.} Several decisions changed during the project:
-\begin{itemize}
-\item Our proposal treated $Z$ as a senator's party; since each sample is a roll call, we redefined $Z$ as the vote type.
-\item Model selection first used the test split; we added a separate validation split.
-\item $K$ and $\lambda$ first landed on the edges of their grids; we widened the grids.
-\item M3's $\lambda$ was first chosen by pseudo-likelihood. Diagnosing weak 117th results showed this criterion, not
-Gibbs mixing, was the cause; choosing $\lambda$ by the prediction task raised accuracy from 0.912 to 0.930.
-\item Brute-force checks caught a bug in our own test harness, and a misleading convergence plot was replaced.
-\item Stochastic EM for M3 brought little gain; we report it as a negative result.
-\item We added M4 to drop M1's assumption that roll calls are independent. Because M4 also sees earlier roll calls'
-votes, we added the ``previous roll call'' baseline to check that its gain is not just copying.
-\item M4's $K$ landed on the grid edge twice (8, then 12). Validation log-likelihood is flat beyond $K=6$, and E3
-changed by $<0.001$ NLL between $K=8$ and $K=12$, so we stopped widening. A sticky transition prior did not help.
-\end{itemize}
-
-\textbf{Advice for future students.} Verify every inference routine against brute force on tiny models before using
-real data. Write down what one sample is before choosing latent variables. Keep the test split untouched until the
-end, and choose hyper-parameters with the score of the task you report.
-
-\textbf{Individual contributions and reflections.} \todo{Each member writes 1--2 sentences on their specific
-tasks and a brief personal reflection, e.g.:}
-\begin{itemize}
-\item \todo{Name 1}: \todo{contribution}. \todo{reflection}.
-\item \todo{Name 2}: \todo{contribution}. \todo{reflection}.
-\item \todo{Name 3}: \todo{contribution}. \todo{reflection}.
-\item \todo{Name 4}: \todo{contribution}. \todo{reflection}.
-\item \todo{Name 5}: \todo{contribution}. \todo{reflection}.
-\end{itemize}
-
-\textbf{Use of generative AI.} We used Claude (Anthropic) to review the proposal against the course requirements,
-to draft the notebook implementation, and to draft this report. \todo{Team: describe how you reviewed, tested and
-adapted the AI-generated code and text, and which parts you wrote yourselves.}
+We assumed missing votes are random, even though senators sometimes miss votes for political reasons. M1--M3 treat roll calls as independent samples, and M4 uses only their order, so none of the models know what a vote is about. M4 was also not included in E2 or E4, and its validation results were so flat that $K$ settled at the largest value we tried. Only 20 test roll calls were cross-cutting, making our conclusions about these rare cases less certain. Finally, E1 tests approximate inference on one 16-senator network, not every possible Ising model.
 
 \phantomsection\label{endmain}
 \begin{thebibliography}{99}\small
@@ -466,7 +354,10 @@ inference. \emph{Foundations and Trends in Machine Learning}, 1(1--2):1--305, 20
 
 \appendix
 \section{Algorithm Details}\label{app:alg}
-\textbf{M1: EM updates.} With $Y_{mi}=[x_{mi}{=}{+}1]$, $N_{mi}=[x_{mi}{=}{-}1]$ and $O_m$ the senators observed on
+This appendix gives the full equations behind the shorter descriptions in Section 3. We keep the equations here so the main discussion stays readable, while still showing exactly what we implemented.
+
+\textbf{M1: EM updates.} The E-step finds the probability that each roll call belongs to each hidden type. The M-step uses those probabilities as weights when counting Yea votes. In the equations below,
+with $Y_{mi}=[x_{mi}{=}{+}1]$, $N_{mi}=[x_{mi}{=}{-}1]$ and $O_m$ the senators observed on
 roll call $m$:
 \begin{align*}
 \text{E-step:}\quad &\gamma_{mk}\propto\pi_k\prod_{i\in O_m}\theta_{ik}^{Y_{mi}}(1-\theta_{ik})^{N_{mi}},\\
@@ -477,7 +368,7 @@ These are MAP updates under Beta($a{+}1,b{+}1$) and Dirichlet($c{+}1$) priors. W
 $a=s\,\theta^{(117)}$, $b=s(1-\theta^{(117)})$ and $c=s\,\pi^{(117)}$ turn the 117th-Senate fit into a prior of
 strength $s$.
 
-\textbf{M2: belief propagation.} Let $\lambda_i(x_i)$ be the evidence indicator: one-hot if senator $i$'s vote is
+\textbf{M2: belief propagation.} The upward messages collect evidence from each branch of the tree; the downward messages then bring in evidence from the rest of the tree. Once both are available, we combine them to get a senator's vote probability. Let $\lambda_i(x_i)$ be the evidence indicator: one-hot if senator $i$'s vote is
 observed, all ones otherwise. The upward pass (leaves first) computes
 $\beta_i(x_i)=\lambda_i(x_i)\prod_{c\in\mathrm{ch}(i)}m_{c\to i}(x_i)$ and
 $m_{i\to p}(x_p)=\sum_{x_i}P(x_i\mid x_p)\,\beta_i(x_i)$, normalizing each $\beta_i$; the log normalizers sum to
@@ -486,7 +377,7 @@ $\alpha_i(x_i)\propto\sum_{x_p}P(x_i\mid x_p)\,\alpha_p(x_p)\beta_p(x_p)/m_{i\to
 marginals are $\propto\alpha_i\beta_i$, and the (parent, child) pair marginals that EM needs are
 $\propto[\alpha_p\beta_p/m_{i\to p}](x_p)\,P(x_i\mid x_p)\,\beta_i(x_i)$.
 
-\textbf{M3: pseudo-likelihood and FISTA.} With local field $h_{mi}=\theta_i+\sum_jW_{ij}x_{mj}$ we minimize
+\textbf{M3: pseudo-likelihood and FISTA.} We avoid computing the full Ising normalizing constant by minimizing the sum of individual conditional prediction losses. The extra $\ell_1$ term penalizes large numbers of links. With local field $h_{mi}=\theta_i+\sum_jW_{ij}x_{mj}$ we minimize
 \[
 F(\theta,W)=\frac1M\sum_m\sum_{i\in O_m}\log\big(1+e^{-2x_{mi}h_{mi}}\big)+\lambda\sum_{i<j}|W_{ij}|.
 \]
@@ -495,24 +386,16 @@ $-\frac1M\sum_m r_{mi}$ for $\theta_i$ and $-\frac1M\sum_m(r_{mi}x_{mj}+r_{mj}x_
 $W_{ij}$. Each FISTA step is a gradient step followed by soft-thresholding of $W$ at $\lambda/L$, with $L$ found by
 backtracking. $\lambda$ is chosen by NLL on the 20\%-reveal task on the validation split.
 
-\textbf{M3: inference.} Gibbs resamples each unobserved $x_i$ from $\sigma(2h_i)$ and estimates marginals by
+\textbf{M3: inference.} For predictions, we hold observed votes fixed and estimate the remaining ones. Gibbs resamples each unobserved $x_i$ from $\sigma(2h_i)$ and estimates marginals by
 averaging these conditional probabilities after burn-in (Rao-Blackwellization), which has lower variance than
 averaging 0/1 samples. Mean-field updates $\mu_i$ one at a time; each update minimizes the variational free energy
 in $\mu_i$, so the sweep converges.
 
-\textbf{M4: Baum-Welch.} With $b_t(k)=\prod_{i\in O_t}\theta_{ik}^{Y_{ti}}(1-\theta_{ik})^{N_{ti}}$, the scaled forward
-pass sets $\hat\alpha_1\propto\pi\odot b_1$ and $\hat\alpha_t\propto(\hat\alpha_{t-1}A)\odot b_t$, each normalized by
-$c_t$, so that $\hat\alpha_t(k)=P(Z_t{=}k\mid\mathbf x_{1..t})$ and $\log P(\mathbf x_O)=\sum_t\log c_t$. The backward
-pass sets $\hat\beta_T=\mathbf 1$ and $\hat\beta_t=A(b_{t+1}\odot\hat\beta_{t+1})/c_{t+1}$. Then
-$\gamma_{tk}=\hat\alpha_t(k)\hat\beta_t(k)$ and $\xi_t(j,k)=\hat\alpha_t(j)A_{jk}b_{t+1}(k)\hat\beta_{t+1}(k)/c_{t+1}$.
-The M-step is $\pi_k\propto\gamma_{1k}+1$, $A_{jk}\propto\sum_t\xi_t(j,k)+1+\kappa[j{=}k]$, and $\theta$ as in M1 with
-$\gamma_{tk}$ in place of $\gamma_{mk}$. For prediction, the filter runs through the training sequence and then, for
-each test roll call, combines the predictive prior $\hat\alpha_{t-1}A$ with the revealed votes; after the prediction
-it is updated with that roll call's full votes.
+\textbf{M4: Baum-Welch.} The forward pass moves through the roll calls in date order and keeps the probability of each type given the votes so far; the backward pass brings in evidence from later roll calls. Rescaling at each step keeps the numbers from becoming too small. With $b_t(k)=\prod_{i\in O_t}\theta_{ik}^{Y_{ti}}(1-\theta_{ik})^{N_{ti}}$, the forward pass sets $\hat\alpha_1\propto\pi\odot b_1$ and $\hat\alpha_t\propto(\hat\alpha_{t-1}A)\odot b_t$, each normalized by $c_t$, so that $\hat\alpha_t(k)=P(Z_t{=}k\mid\mathbf x_{1..t})$ and $\log P(\mathbf x_O)=\sum_t\log c_t$. The backward pass sets $\hat\beta_T=\mathbf 1$ and $\hat\beta_t=A(b_{t+1}\odot\hat\beta_{t+1})/c_{t+1}$. Then $\gamma_{tk}=\hat\alpha_t(k)\hat\beta_t(k)$ and $\xi_t(j,k)=\hat\alpha_t(j)A_{jk}b_{t+1}(k)\hat\beta_{t+1}(k)/c_{t+1}$. The M-step is $\pi_k\propto\gamma_{1k}+1$, $A_{jk}\propto\sum_t\xi_t(j,k)+1+\kappa[j{=}k]$, and $\theta$ as in M1 with $\gamma_{tk}$ in place of $\gamma_{mk}$. For prediction, the filter runs through the training sequence and then, for each test roll call, combines the predicted prior $\hat\alpha_{t-1}A$ with the revealed votes; after the prediction it is updated with that roll call's full votes.
 
 \section{Additional Figures and Tables}
 
-\begin{table}[h]
+\begin{table}[H] 
 \centering\small
 \caption{Correctness checks against brute-force enumeration (random 6-variable models) and synthetic recovery.}
 \label{tab:checks}
@@ -535,7 +418,7 @@ Chow-Liu edge recovery, 30-node tree, 3000 samples & 26/29\\
 \end{tabular}
 \end{table}
 
-\begin{table}[h]
+\begin{table}[H] 
 \centering\small
 \caption{Diagnosing M3 on the E3 task (3 reveals): more Gibbs sweeps vs.\ the pseudo-likelihood choice of $\lambda$.}
 \label{tab:diag}
@@ -553,7 +436,7 @@ Pseudo-likelihood $\lambda=0.05$, mean-field & 0.886 & 0.339 & 0.935 & 0.201\\
 \end{tabular}
 \end{table}
 
-\begin{table}[h]
+\begin{table}[H] 
 \centering\small
 \caption{Vote questions of 118th training roll calls by most likely M1 coalition type.}
 \begin{tabular}{lrrrrrr}
@@ -570,22 +453,22 @@ Other & 8 & 15 & 11 & 10 & 3 & 9\\
 \end{tabular}
 \end{table}
 
-\begin{figure}[h]
+\begin{figure}[H] 
 \centering
 \includegraphics[width=0.95\linewidth]{data_vote_matrix.pdf}
 \caption{Vote matrices after preprocessing (senators sorted by NOMINATE dimension 1).}
 \end{figure}
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \includegraphics[width=\linewidth]{model_selection.pdf}
-\caption{Model selection on the validation split: M1's $K$ (log-likelihood), M4's $K$ and stickiness $\kappa$
-(log-likelihood of the chain's continuation), M3's $\lambda$ (NLL on the 20\%-reveal prediction task), and M3's
-number of couplings.}
+\caption{Model selection on the validation split: M1's $K$ (log-likelihood), M4's $K$ and same-type count $\kappa$
+(log-likelihood of the next roll calls in the sequence), M3's $\lambda$ (NLL on the 20\%-reveal prediction task), and
+M3's number of couplings.}
 \label{fig:selection}
 \end{figure}
 
-\begin{figure}[h]
+\begin{figure}[H] 
 \centering
 \includegraphics[width=\linewidth]{convergence.pdf}
 \caption{Convergence on the 118th training data: M1 EM, M2 EM (penalized log-likelihood), and the relative change
@@ -593,10 +476,13 @@ of the M3 FISTA objective per iteration.}
 \label{fig:conv}
 \end{figure}
 
-\begin{figure}[h]
+\begin{figure}[H]
 \centering
 \includegraphics[width=0.9\linewidth]{E3_comparison.pdf}
 \caption{E3 accuracy and NLL for both Congresses.}
 \end{figure}
 
+
+\Needspace{3\baselineskip}
+\textbf{Use of generative AI:} We used ChatGPT and Claude  to review the proposal against course requirements, draft the notebook implementation, and draft the report. 
 \end{document}
