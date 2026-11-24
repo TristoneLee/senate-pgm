@@ -323,6 +323,37 @@ A few takeaways from our experiments. First, we noticed that a mean-field tends 
 \subsection{Limitations}
 We assumed missing votes are random, even though senators sometimes miss votes for political reasons. M1--M3 treat roll calls as independent samples, and M4 uses only their order, so none of the models know what a vote is about. M4 was also not included in E2 or E4, and its validation results were so flat that $K$ settled at the largest value we tried. Only 20 test roll calls were cross-cutting, making our conclusions about these rare cases less certain. Finally, E1 tests approximate inference on one 16-senator network, not every possible Ising model.
 
+\section{Reflections \& Contributions}
+\textbf{Iteration.} Several decisions changed during the project:
+\begin{itemize}
+\item Our proposal treated $Z$ as a senator's party; since each sample is a roll call, we redefined $Z$ as the vote type.
+\item Model selection first used the test split; we added a separate validation split.
+\item $K$ and $\lambda$ first landed on the edges of their grids; we widened the grids.
+\item M3's $\lambda$ was first chosen by pseudo-likelihood. Diagnosing weak 117th results showed this criterion, not
+Gibbs mixing, was the cause; choosing $\lambda$ by the prediction task raised accuracy from 0.912 to 0.930.
+\item Brute-force checks caught a bug in our own test harness, and a misleading convergence plot was replaced.
+\item Stochastic EM for M3 brought little gain; we report it as a negative result.
+\item We added M4 to drop M1's assumption that roll calls are independent. Because M4 also sees earlier roll calls'
+votes, we added the ``previous roll call'' baseline to check that its gain is not just copying.
+\end{itemize}
+
+\textbf{Advice for future students.} Verify every inference routine against brute force on tiny models before using
+real data. Write down what one sample is before choosing latent variables. Keep the test split untouched until the
+end, and choose hyper-parameters with the score of the task you report.
+
+\textbf{Individual contributions and reflections.} \todo{Each member writes 1--2 sentences on their specific
+tasks and a brief personal reflection, e.g.:}
+\begin{itemize}
+\item \todo{Leizhi Li}: \todo{contribution}. \todo{reflection}.
+\item \todo{Doanh Nguyen}: \todo{contribution}. \todo{reflection}.
+\item \todo{Uma Upasani}: \todo{contribution}. \todo{reflection}.
+\item \todo{Evan Lee}: \todo{contribution}. \todo{reflection}.
+\end{itemize}
+
+\textbf{Use of generative AI.} We used Claude (Anthropic) to review the proposal against the course requirements,
+to draft the notebook implementation, and to draft this report. \todo{Team: describe how you reviewed, tested and
+adapted the AI-generated code and text, and which parts you wrote yourselves.}
+
 \phantomsection\label{endmain}
 \begin{thebibliography}{99}\small
 \setlength{\itemsep}{1pt}
@@ -484,5 +515,4 @@ of the M3 FISTA objective per iteration.}
 
 
 \Needspace{3\baselineskip}
-\textbf{Use of generative AI:} We used ChatGPT and Claude  to review the proposal against course requirements, draft the notebook implementation, and draft the report. 
 \end{document}
