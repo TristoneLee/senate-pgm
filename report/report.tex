@@ -344,7 +344,10 @@ end, and choose hyper-parameters with the score of the task you report.
 \textbf{Individual contributions and reflections.} \todo{Each member writes 1--2 sentences on their specific
 tasks and a brief personal reflection, e.g.:}
 \begin{itemize}
-\item \todo{Leizhi Li}: \todo{contribution}. \todo{reflection}.
+\item Leizhi Li: implemented M3, the sparse Ising model, including $\ell_1$ pseudo-likelihood learning with FISTA,
+Gibbs and mean-field inference, and the exact 16-senator enumeration used in E1. When M3 underperformed, I
+first suspected Gibbs mixing, but running 3000 sweeps changed nothing; switching the $\lambda$ selection from
+pseudo-likelihood to the prediction task raised 117th accuracy from 0.912 to 0.930.
 \item \todo{Doanh Nguyen}: \todo{contribution}. \todo{reflection}.
 \item \todo{Uma Upasani}: \todo{contribution}. \todo{reflection}.
 \item \todo{Evan Lee}: \todo{contribution}. \todo{reflection}.
